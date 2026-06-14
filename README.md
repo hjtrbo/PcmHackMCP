@@ -75,6 +75,10 @@ The script runs inside Ghidra and returns its printed output.
 
 > Security: the embedded HTTP server binds to all interfaces and `run_python` executes arbitrary code in your Ghidra session. Run it only on a trusted network.
 
+## Claude Code skill
+
+A Claude Code skill ships with this repo at [`.claude/skills/pcmhack-mcp/SKILL.md`](.claude/skills/pcmhack-mcp/SKILL.md). It captures the discipline for writing good `run_python` payloads: the whole-script model, printing results as JSON, the automatic (commit-on-error) transaction, and the Jython 2.7 traps that bite. It loads automatically when you work with `run_python`.
+
 ## Build from source
 
 No Maven required (it is a single source file). With JDK 17-21:
