@@ -59,3 +59,7 @@ lib/*.jar
 __pycache__/
 *.pyc
 
+# Setup manual: keep sources (.md, img/, build script) local; publish only the built PDF
+docs/*
+!docs/*.pdf
+
