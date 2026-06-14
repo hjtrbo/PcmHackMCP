@@ -14,11 +14,11 @@ from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
 
-DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8080/"
+DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8765/"
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("ghidra-mcp")
+mcp = FastMCP("pcmhack-mcp")
 
 # Initialize ghidra_server_url with default value
 ghidra_server_url = DEFAULT_GHIDRA_SERVER
@@ -42,13 +42,13 @@ def safe_get(endpoint: str, params: dict = None) -> list:
     except Exception as e:
         return [f"Request failed: {str(e)}"]
 
-def safe_post(endpoint: str, data: dict | str) -> str:
+def safe_post(endpoint: str, data: dict | str, timeout: int = 5) -> str:
     try:
         url = urljoin(ghidra_server_url, endpoint)
         if isinstance(data, dict):
-            response = requests.post(url, data=data, timeout=5)
+            response = requests.post(url, data=data, timeout=timeout)
         else:
-            response = requests.post(url, data=data.encode("utf-8"), timeout=5)
+            response = requests.post(url, data=data.encode("utf-8"), timeout=timeout)
         response.encoding = 'utf-8'
         if response.ok:
             return response.text.strip()
@@ -286,6 +286,32 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def run_python(code: str, timeout: int = 600) -> str:
+    """
+    Execute an arbitrary Python (Jython 2.7) script INSIDE Ghidra against the current program,
+    server-side, in a single round trip. Prefer this for bulk or iterative work (mass renames,
+    xref sweeps, batch comments, applying data types over many addresses): the loop runs in
+    Ghidra rather than as thousands of individual MCP/HTTP calls.
+
+    The script runs with the full GhidraScript environment available, including currentProgram,
+    currentAddress, monitor, and all FlatProgramAPI helpers (getFunctionAt, getInstructionAt,
+    toAddr, createLabel, setEOLComment, getDataAt, etc.). A program transaction is opened and
+    committed automatically, so any changes the script makes are saved.
+
+    Return values by PRINTING them: both print(...) and println(...) output is captured and
+    returned as this tool's result. Print only the data you actually need back, and keep large
+    result sets compact (e.g. summarize or page) to avoid oversized responses.
+
+    Args:
+        code: The Python/Jython source to execute server-side.
+        timeout: Seconds to wait for the script to finish (default 600). Raise for very large sweeps.
+
+    Returns:
+        The combined stdout/stderr produced by the script, or an exception traceback on failure.
+    """
+    return safe_post("run_python", code, timeout=timeout)
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")

@@ -24,7 +24,7 @@
                 <include>extension.properties</include>
                 <include>Module.manifest</include>
             </includes>
-            <outputDirectory>GhidraMCP</outputDirectory>
+            <outputDirectory>PcmHackMCP</outputDirectory>
         </fileSet>
         
         <!-- 2) Copy your built plugin JAR into GhidraMCP/lib -->
@@ -32,9 +32,9 @@
             <directory>${project.build.directory}</directory>
             <includes>
                 <!-- Use the finalized JAR name from the maven-jar-plugin -->
-                <include>GhidraMCP.jar</include>
+                <include>PcmHackMCP.jar</include>
             </includes>
-            <outputDirectory>GhidraMCP/lib</outputDirectory>
+            <outputDirectory>PcmHackMCP/lib</outputDirectory>
         </fileSet>
     </fileSets>
 </assembly>

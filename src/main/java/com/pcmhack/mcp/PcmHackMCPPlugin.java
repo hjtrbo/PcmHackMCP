@@ -1,4 +1,4 @@
-package com.lauriewired;
+package com.pcmhack.mcp;
 
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
@@ -44,17 +44,27 @@ import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
+import ghidra.app.script.GhidraScript;
+import ghidra.app.script.GhidraScriptProvider;
+import ghidra.app.script.GhidraScriptUtil;
+import ghidra.app.script.GhidraState;
+import ghidra.framework.model.Project;
+import generic.jar.ResourceFile;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import javax.swing.SwingUtilities;
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -65,16 +75,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
     shortDescription = "HTTP server plugin",
     description = "Starts an embedded HTTP server to expose program data. Port configurable via Tool Options."
 )
-public class GhidraMCPPlugin extends Plugin {
+public class PcmHackMCPPlugin extends Plugin {
 
     private HttpServer server;
-    private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
+    private static final String OPTION_CATEGORY_NAME = "PcmHackMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
-    private static final int DEFAULT_PORT = 8080;
+    private static final int DEFAULT_PORT = 8765;
 
-    public GhidraMCPPlugin(PluginTool tool) {
+    public PcmHackMCPPlugin(PluginTool tool) {
         super(tool);
-        Msg.info(this, "GhidraMCPPlugin loading...");
+        Msg.info(this, "PcmHackMCPPlugin loading...");
 
         // Register the configuration option
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
@@ -89,7 +99,7 @@ public class GhidraMCPPlugin extends Plugin {
         catch (IOException e) {
             Msg.error(this, "Failed to start HTTP server", e);
         }
-        Msg.info(this, "GhidraMCPPlugin loaded!");
+        Msg.info(this, "PcmHackMCPPlugin loaded!");
     }
 
     private void startServer() throws IOException {
@@ -341,16 +351,25 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
+        // Escape hatch: run an arbitrary Python (Jython) script server-side against the
+        // current program. The raw POST body is the script source. Lets a single MCP call
+        // do bulk work (mass renames, xref sweeps, batch comments) inside Ghidra instead of
+        // thousands of individual endpoint round-trips.
+        server.createContext("/run_python", exchange -> {
+            String code = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            sendResponse(exchange, runPythonScript(code));
+        });
+
         server.setExecutor(null);
         new Thread(() -> {
             try {
                 server.start();
-                Msg.info(this, "GhidraMCP HTTP server started on port " + port);
+                Msg.info(this, "PcmHackMCP HTTP server started on port " + port);
             } catch (Exception e) {
                 Msg.error(this, "Failed to start HTTP server on port " + port + ". Port might be in use.", e);
                 server = null; // Ensure server isn't considered running
             }
-        }, "GhidraMCP-HTTP-Server").start();
+        }, "PcmHackMCP-HTTP-Server").start();
     }
 
     // ----------------------------------------------------------------------------------
@@ -1624,6 +1643,71 @@ public class GhidraMCPPlugin extends Plugin {
         return sb.toString();
     }
 
+    /**
+     * Execute an arbitrary Python (Jython 2.7) script against the current program, server-side.
+     * The whole script runs inside Ghidra's interpreter in one call, so iteration never crosses
+     * the HTTP boundary. The full GhidraScript environment is available to the script
+     * (currentProgram, currentAddress, monitor, and every FlatProgramAPI helper such as
+     * getFunctionAt / toAddr / setEOLComment). GhidraScript.execute() runs start()/run()/end(true),
+     * so a program transaction is opened and committed automatically and edits are saved.
+     * Output is captured: both Jython print(...) and GhidraScript println(...) land in the writer
+     * and are returned as the HTTP response body.
+     *
+     * Runs on the HTTP handler thread (off the Swing EDT), the same way Ghidra's own Script
+     * Manager runs scripts, so a long sweep does not freeze the GUI.
+     */
+    private String runPythonScript(String code) {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return "Error: no program loaded";
+        }
+        if (code == null || code.trim().isEmpty()) {
+            return "Error: empty script body";
+        }
+
+        StringWriter sw = new StringWriter();
+        PrintWriter writer = new PrintWriter(sw, true);
+        File tempFile = null;
+        try {
+            // The script provider builds its instance from a real .py file on disk.
+            tempFile = File.createTempFile("ghidramcp_", ".py");
+            Files.write(tempFile.toPath(), code.getBytes(StandardCharsets.UTF_8));
+            ResourceFile scriptFile = new ResourceFile(tempFile);
+
+            GhidraScriptProvider provider = GhidraScriptUtil.getProvider(scriptFile);
+            if (provider == null) {
+                return "Error: no script provider for .py (is the Python/Jython feature enabled?)";
+            }
+
+            GhidraScript script = provider.getScriptInstance(scriptFile, writer);
+            if (script == null) {
+                return "Error: could not create a script instance for the supplied code";
+            }
+
+            Project project = tool.getProject();
+            ProgramLocation location = new ProgramLocation(program, program.getMinAddress());
+            GhidraState state = new GhidraState(tool, project, program, location, null, null);
+            TaskMonitor monitor = new ConsoleTaskMonitor();
+
+            script.execute(state, monitor, writer);
+        }
+        catch (Exception e) {
+            writer.println("Exception: " + e.getClass().getName() + ": " + e.getMessage());
+            for (StackTraceElement el : e.getStackTrace()) {
+                writer.println("    at " + el);
+            }
+        }
+        finally {
+            writer.flush();
+            if (tempFile != null) {
+                tempFile.delete();
+            }
+        }
+
+        String output = sw.toString();
+        return output.isEmpty() ? "(script finished with no output)" : output;
+    }
+
     public Program getCurrentProgram() {
         ProgramManager pm = tool.getService(ProgramManager.class);
         return pm != null ? pm.getCurrentProgram() : null;
@@ -1641,10 +1725,10 @@ public class GhidraMCPPlugin extends Plugin {
     @Override
     public void dispose() {
         if (server != null) {
-            Msg.info(this, "Stopping GhidraMCP HTTP server...");
+            Msg.info(this, "Stopping PcmHackMCP HTTP server...");
             server.stop(1); // Stop with a small delay (e.g., 1 second) for connections to finish
             server = null; // Nullify the reference
-            Msg.info(this, "GhidraMCP HTTP server stopped.");
+            Msg.info(this, "PcmHackMCP HTTP server stopped.");
         }
         super.dispose();
     }

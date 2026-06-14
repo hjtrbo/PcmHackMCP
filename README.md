@@ -1,119 +1,95 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/LaurieWired/GhidraMCP)](https://github.com/LaurieWired/GhidraMCP/releases)
-[![GitHub stars](https://img.shields.io/github/stars/LaurieWired/GhidraMCP)](https://github.com/LaurieWired/GhidraMCP/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/LaurieWired/GhidraMCP)](https://github.com/LaurieWired/GhidraMCP/network/members)
-[![GitHub contributors](https://img.shields.io/github/contributors/LaurieWired/GhidraMCP)](https://github.com/LaurieWired/GhidraMCP/graphs/contributors)
-[![Follow @lauriewired](https://img.shields.io/twitter/follow/lauriewired?style=social)](https://twitter.com/lauriewired)
 
-![ghidra_MCP_logo](https://github.com/user-attachments/assets/4986d702-be3f-4697-acce-aea55cd79ad3)
+# PcmHackMCP
 
+PcmHackMCP is a fork of [LaurieWired/GhidraMCP](https://github.com/LaurieWired/GhidraMCP) (Apache-2.0): a Model Context Protocol (MCP) server plus Ghidra plugin that lets MCP clients (Claude, etc.) drive Ghidra for reverse engineering.
 
-# ghidraMCP
-ghidraMCP is an Model Context Protocol server for allowing LLMs to autonomously reverse engineer applications. It exposes numerous tools from core Ghidra functionality to MCP clients.
+It keeps all of the upstream tools and adds one thing: a **server-side `run_python` tool** that executes an arbitrary Jython script inside Ghidra in a single call. Bulk work - mass renames, xref sweeps, batch comments, applying data types over many addresses - runs as one loop inside Ghidra instead of thousands of individual MCP/HTTP round-trips. Only the printed result crosses the wire.
 
-https://github.com/user-attachments/assets/36080514-f227-44bd-af84-78e29ee1d7f9
+To run alongside the original GhidraMCP without clashing, every identifier is renamed and the default port is changed:
 
+| | Upstream GhidraMCP | PcmHackMCP |
+|---|---|---|
+| MCP server name | `ghidra-mcp` | `pcmhack-mcp` |
+| Ghidra module / extension | `GhidraMCP` | `PcmHackMCP` |
+| Java class | `com.lauriewired.GhidraMCPPlugin` | `com.pcmhack.mcp.PcmHackMCPPlugin` |
+| Default HTTP port | 8080 | 8765 |
+| MCP bridge script | `bridge_mcp_ghidra.py` | `bridge_mcp_pcmhack.py` |
 
-# Features
-MCP Server + Ghidra Plugin
+## Features
 
-- Decompile and analyze binaries in Ghidra
-- Automatically rename methods and data
-- List methods, classes, imports, and exports
+- Everything in upstream GhidraMCP (decompile, list/rename functions and data, imports/exports, xrefs, strings, set prototypes, and more).
+- `run_python(code, timeout=600)` - run an arbitrary Jython script server-side against the current program. Full GhidraScript environment is available (`currentProgram`, the flat API, `monitor`); a program transaction is opened and committed automatically; both `print(...)` and `println(...)` output is captured and returned.
 
-# Installation
+## Install
 
-## Prerequisites
-- Install [Ghidra](https://ghidra-sre.org)
-- Python3
-- MCP [SDK](https://github.com/modelcontextprotocol/python-sdk)
+### Prerequisites
+- Ghidra 11.3.2
+- Python 3.10+ and the MCP SDK: `pip install "mcp>=1.2.0,<2" "requests>=2,<3"`
 
-## Ghidra
-First, download the latest [release](https://github.com/LaurieWired/GhidraMCP/releases) from this repository. This contains the Ghidra plugin and Python MCP client. Then, you can directly import the plugin into Ghidra.
-
+### Ghidra plugin
 1. Run Ghidra
-2. Select `File` -> `Install Extensions`
-3. Click the `+` button
-4. Select the `GhidraMCP-1-2.zip` (or your chosen version) from the downloaded release
-5. Restart Ghidra
-6. Make sure the GhidraMCPPlugin is enabled in `File` -> `Configure` -> `Developer`
-7. *Optional*: Configure the port in Ghidra with `Edit` -> `Tool Options` -> `GhidraMCP HTTP Server`
+2. `File` -> `Install Extensions`
+3. Click `+` and select `PcmHackMCP-11.3.2.zip`
+4. Restart Ghidra
+5. Enable **PcmHackMCP** in `File` -> `Configure` -> `Developer`
+6. Optional: change the port in `Edit` -> `Tool Options` -> `PcmHackMCP HTTP Server` (default 8765)
 
-Video Installation Guide:
-
-
-https://github.com/user-attachments/assets/75f0c176-6da1-48dc-ad96-c182eb4648c3
-
-
-
-## MCP Clients
-
-Theoretically, any MCP client should work with ghidraMCP.  Three examples are given below.
-
-## Example 1: Claude Desktop
-To set up Claude Desktop as a Ghidra MCP client, go to `Claude` -> `Settings` -> `Developer` -> `Edit Config` -> `claude_desktop_config.json` and add the following:
-
+### MCP client (Claude Desktop example)
+`Claude` -> `Settings` -> `Developer` -> `Edit Config`, then:
 ```json
 {
   "mcpServers": {
-    "ghidra": {
-      "command": "python",
+    "pcmhack": {
+      "command": "py",
       "args": [
-        "/ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py",
+        "-3",
+        "C:\\ABSOLUTE_PATH_TO\\bridge_mcp_pcmhack.py",
         "--ghidra-server",
-        "http://127.0.0.1:8080/"
+        "http://127.0.0.1:8765/"
       ]
     }
   }
 }
 ```
+Host/port default to `127.0.0.1:8765` if not set.
 
-Alternatively, edit this file directly:
+### Claude Code
 ```
-/Users/YOUR_USER/Library/Application Support/Claude/claude_desktop_config.json
-```
-
-The server IP and port are configurable and should be set to point to the target Ghidra instance. If not set, both will default to localhost:8080.
-
-## Example 2: Cline
-To use GhidraMCP with [Cline](https://cline.bot), this requires manually running the MCP server as well. First run the following command:
-
-```
-python bridge_mcp_ghidra.py --transport sse --mcp-host 127.0.0.1 --mcp-port 8081 --ghidra-server http://127.0.0.1:8080/
+claude mcp add pcmhack -- py -3 "C:\ABSOLUTE_PATH_TO\bridge_mcp_pcmhack.py"
 ```
 
-The only *required* argument is the transport. If all other arguments are unspecified, they will default to the above. Once the MCP server is running, open up Cline and select `MCP Servers` at the top.
+## run_python example
 
-![Cline select](https://github.com/user-attachments/assets/88e1f336-4729-46ee-9b81-53271e9c0ce0)
+```
+curl -s -X POST http://127.0.0.1:8765/run_python --data-binary @- <<'PY'
+count = 0
+for f in currentProgram.getFunctionManager().getFunctions(True):
+    if f.getName().startswith("FUN_"):
+        count += 1
+print("auto-named functions:", count)
+PY
+```
 
-Then select `Remote Servers` and add the following, ensuring that the url matches the MCP host and port:
+The script runs inside Ghidra and returns its printed output.
 
-1. Server Name: GhidraMCP
-2. Server URL: `http://127.0.0.1:8081/sse`
+> Security: the embedded HTTP server binds to all interfaces and `run_python` executes arbitrary code in your Ghidra session. Run it only on a trusted network.
 
-## Example 3: 5ire
-Another MCP client that supports multiple models on the backend is [5ire](https://github.com/nanbingxyz/5ire). To set up GhidraMCP, open 5ire and go to `Tools` -> `New` and set the following configurations:
+## Build from source
 
-1. Tool Key: ghidra
-2. Name: GhidraMCP
-3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
+No Maven required (it is a single source file). With JDK 17-21:
 
-# Building from Source
-1. Copy the following files from your Ghidra directory to this project's `lib/` directory:
-- `Ghidra/Features/Base/lib/Base.jar`
-- `Ghidra/Features/Decompiler/lib/Decompiler.jar`
-- `Ghidra/Framework/Docking/lib/Docking.jar`
-- `Ghidra/Framework/Generic/lib/Generic.jar`
-- `Ghidra/Framework/Project/lib/Project.jar`
-- `Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar`
-- `Ghidra/Framework/Utility/lib/Utility.jar`
-- `Ghidra/Framework/Gui/lib/Gui.jar`
-2. Build with Maven by running:
+1. Copy these jars from your Ghidra install into `lib/`:
+   - `Base.jar`, `Decompiler.jar`, `Docking.jar`, `Generic.jar`, `Project.jar`, `SoftwareModeling.jar`, `Utility.jar`, `Gui.jar`
+2. Compile and package:
+   ```
+   javac --release 17 -cp "lib/*" -d build/classes src/main/java/com/pcmhack/mcp/PcmHackMCPPlugin.java
+   jar --create --file target/PcmHackMCP.jar --manifest src/main/resources/META-INF/MANIFEST.MF -C build/classes .
+   ```
+3. Zip an extension folder `PcmHackMCP/` containing `extension.properties`, `Module.manifest`, and `lib/PcmHackMCP.jar`.
 
-`mvn clean package assembly:single`
+Or, if you have Maven installed: `mvn clean package assembly:single`.
 
-The generated zip file includes the built Ghidra plugin and its resources. These files are required for Ghidra to recognize the new extension.
+## Credits
 
-- lib/GhidraMCP.jar
-- extensions.properties
-- Module.manifest
+Fork of [GhidraMCP](https://github.com/LaurieWired/GhidraMCP) by LaurieWired. Licensed under Apache-2.0; see [LICENSE](LICENSE).
