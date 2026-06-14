@@ -90,7 +90,11 @@ No Maven required (it is a single source file). With JDK 17-21:
    javac --release 17 -cp "lib/*" -d build/classes src/main/java/com/pcmhack/mcp/PcmHackMCPPlugin.java
    jar --create --file target/PcmHackMCP.jar --manifest src/main/resources/META-INF/MANIFEST.MF -C build/classes .
    ```
-3. Zip an extension folder `PcmHackMCP/` containing `extension.properties`, `Module.manifest`, and `lib/PcmHackMCP.jar`.
+3. Stage an extension folder `target/ext/PcmHackMCP/` containing `extension.properties`, `Module.manifest`, and `lib/PcmHackMCP.jar`, then zip it **with the `jar` tool**:
+   ```
+   jar --create --file target/PcmHackMCP-11.3.2.zip -C target/ext PcmHackMCP
+   ```
+   Do not zip it with PowerShell `Compress-Archive` or .NET `ZipFile.CreateFromDirectory` - on Windows PowerShell 5.1 both write **backslash** zip entry paths, which Ghidra's installer rejects ("Unexpected error installing extension"). The `jar` tool writes forward-slash paths and directory entries, which Ghidra accepts.
 
 Or, if you have Maven installed: `mvn clean package assembly:single`.
 
