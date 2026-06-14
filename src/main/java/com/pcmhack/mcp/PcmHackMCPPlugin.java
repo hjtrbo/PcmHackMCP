@@ -1650,8 +1650,11 @@ public class PcmHackMCPPlugin extends Plugin {
      * (currentProgram, currentAddress, monitor, and every FlatProgramAPI helper such as
      * getFunctionAt / toAddr / setEOLComment). GhidraScript.execute() runs start()/run()/end(true),
      * so a program transaction is opened and committed automatically and edits are saved.
-     * Output is captured: both Jython print(...) and GhidraScript println(...) land in the writer
-     * and are returned as the HTTP response body.
+     * Output is captured by redirecting Jython's sys.stdout / sys.stderr to an in-script buffer
+     * that is written to a temp file and read back here. Ghidra routes a script's print/println to
+     * the GUI ConsoleService whenever a tool is present (not to the PrintWriter passed to execute),
+     * so the writer alone cannot be relied on for output. Use print(...) - that is the channel that
+     * is captured and returned as the HTTP response body.
      *
      * Runs on the HTTP handler thread (off the Swing EDT), the same way Ghidra's own Script
      * Manager runs scripts, so a long sweep does not freeze the GUI.
@@ -1667,16 +1670,69 @@ public class PcmHackMCPPlugin extends Plugin {
 
         StringWriter sw = new StringWriter();
         PrintWriter writer = new PrintWriter(sw, true);
-        File tempFile = null;
+        File userFile = null;
+        File harnessFile = null;
+        File outFile = null;
         try {
-            // The script provider builds its instance from a real .py file on disk.
-            tempFile = File.createTempFile("ghidramcp_", ".py");
-            Files.write(tempFile.toPath(), code.getBytes(StandardCharsets.UTF_8));
-            ResourceFile scriptFile = new ResourceFile(tempFile);
+            // User code lives in its own file: tracebacks keep correct line numbers, and we never
+            // have to escape it into a string literal.
+            userFile = File.createTempFile("pcmhack_user_", ".py");
+            Files.write(userFile.toPath(), code.getBytes(StandardCharsets.UTF_8));
+
+            // Ghidra wires a script's print/println to the GUI ConsoleService (or System.out) when a
+            // tool is present, NOT to the PrintWriter we pass to execute(). So the only reliable way
+            // to capture output is to redirect sys.stdout / sys.stderr inside Jython to our own buffer
+            // and write what we collected to a file we read back here.
+            outFile = File.createTempFile("pcmhack_out_", ".txt");
+            String userPath = userFile.getAbsolutePath().replace('\\', '/');
+            String outPath = outFile.getAbsolutePath().replace('\\', '/');
+
+            String harness = String.join("\n",
+                "# -*- coding: utf-8 -*-",
+                "import sys",
+                "class _PcmCap(object):",
+                "    def __init__(self):",
+                "        self.parts = []",
+                "    def write(self, s):",
+                "        if isinstance(s, unicode):",
+                "            s = s.encode('utf-8')",
+                "        self.parts.append(s)",
+                "    def writelines(self, seq):",
+                "        for _s in seq:",
+                "            self.write(_s)",
+                "    def flush(self):",
+                "        pass",
+                "    def getvalue(self):",
+                "        return ''.join(self.parts)",
+                "_pcm_cap = _PcmCap()",
+                "_pcm_out = sys.stdout",
+                "_pcm_err = sys.stderr",
+                "sys.stdout = _pcm_cap",
+                "sys.stderr = _pcm_cap",
+                "try:",
+                "    execfile(u'" + userPath + "')",
+                "except SystemExit:",
+                "    pass",
+                "except:",
+                "    import traceback",
+                "    traceback.print_exc()",
+                "finally:",
+                "    sys.stdout = _pcm_out",
+                "    sys.stderr = _pcm_err",
+                "    _pcm_f = open('" + outPath + "', 'wb')",
+                "    try:",
+                "        _pcm_f.write(_pcm_cap.getvalue())",
+                "    finally:",
+                "        _pcm_f.close()",
+                "");
+
+            harnessFile = File.createTempFile("pcmhack_harness_", ".py");
+            Files.write(harnessFile.toPath(), harness.getBytes(StandardCharsets.UTF_8));
+            ResourceFile scriptFile = new ResourceFile(harnessFile);
 
             GhidraScriptProvider provider = GhidraScriptUtil.getProvider(scriptFile);
             if (provider == null) {
-                return "Error: no script provider for .py (is the Python/Jython feature enabled?)";
+                return "Error: no script provider for .py (is the Jython feature enabled?)";
             }
 
             GhidraScript script = provider.getScriptInstance(scriptFile, writer);
@@ -1699,13 +1755,28 @@ public class PcmHackMCPPlugin extends Plugin {
         }
         finally {
             writer.flush();
-            if (tempFile != null) {
-                tempFile.delete();
+            if (userFile != null) {
+                userFile.delete();
+            }
+            if (harnessFile != null) {
+                harnessFile.delete();
             }
         }
 
-        String output = sw.toString();
-        return output.isEmpty() ? "(script finished with no output)" : output;
+        // Prefer what the script actually printed (captured via the redirect harness); append any
+        // Java-level failure recorded on the writer (e.g. the interpreter failing to start).
+        String captured = "";
+        if (outFile != null && outFile.exists()) {
+            try {
+                captured = new String(Files.readAllBytes(outFile.toPath()), StandardCharsets.UTF_8);
+            }
+            catch (Exception e) {
+                captured = "";
+            }
+            outFile.delete();
+        }
+        String combined = captured + sw.toString();
+        return combined.isEmpty() ? "(script finished with no output)" : combined;
     }
 
     public Program getCurrentProgram() {
