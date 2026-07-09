@@ -1,0 +1,13 @@
+{
+  "id": "pcmhack-mcp",
+  "name": "pcmhack-mcp",
+  "version": "1.0.0",
+  "description": "Use when writing or running code through the PcmHackMCP `run_python` tool (or POSTing to the Ghidra plugin's :8765/run_python endpoint) - i.e. executing an arbitrary Jython script server-side inside a live Ghidra session via MCP. Covers the whole-script execution model, print/JSON output discipline, the automatic (commit-on-error) transaction, and how this differs from the ghidra_bridge client. Do NOT trigger for the ghidra_bridge/jfx_bridge RPC client (that has its own skill) or plain Ghidra GUI/headless questions.",
+  "entry": "SKILL.md",
+  "triggers": {
+    "commands": [],
+    "promptPatterns": [],
+    "fileTypes": []
+  },
+  "priority": 0
+}
